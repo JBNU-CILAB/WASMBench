@@ -1,0 +1,24 @@
+[submodule "third_party/sqlite"]
+	path = third_party/sqlite
+	url = https://github.com/sqlite/sqlite
+	shallow = true
+[submodule "third_party/cjson"]
+	path = third_party/cjson
+	url = https://github.com/DaveGamble/cJSON
+	shallow = true
+[submodule "third_party/btree"]
+	path = third_party/btree
+	url = https://github.com/tidwall/btree.c
+	shallow = true
+[submodule "third_party/zlib"]
+	path = third_party/zlib
+	url = https://github.com/madler/zlib
+	shallow = true
+[submodule "third_party/lua"]
+	path = third_party/lua
+	url = https://github.com/lua/lua
+	shallow = true
+[submodule "third_party/ezxml"]
+	path = third_party/ezxml
+	url = https://github.com/lxfontes/ezxml
+	shallow = true
