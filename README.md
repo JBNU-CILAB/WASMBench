@@ -12,6 +12,7 @@ Real workload based WebAssembly engine performance benchmark suite.
 | `xml`    | ezXML 0.8.6, parse and walk a generated document |
 | `zlib`   | madler/zlib, deflate + inflate roundtrip |
 | `lua`    | Lua 5.5, word-count and pattern-matching script |
+| `ffmpeg` | FFmpeg 8.1.3 libavcodec + x264, encode or decode a generated video |
 
 ## Build
 
@@ -20,8 +21,13 @@ git submodule update --init --depth 1
 ./build.sh
 ./build.sh sqlite zlib
 DEFS_sqlite="-DROWS=5000" ./build.sh sqlite
+DEFS_ffmpeg="-DENCODER=mpeg4 -DMODE=1" ./build.sh ffmpeg
 ```
 
-Requires wasi-sdk (`WASI_SDK`), a host C compiler and `tclsh`.
+Requires wasi-sdk (`WASI_SDK`), a host C compiler and `tclsh`, plus `make` and
+`pkg-config` for `ffmpeg`. The `ffmpeg` encoder is one of `libx264` (default),
+`mpeg4`, `mpeg2video`, `mjpeg`, `prores_ks` and `ffv1`; `MODE=0` decodes and
+`MODE=1` encodes. Its libraries are built once per target under `build/` and
+`ffmpeg` is not available with `TOOLCHAIN=emscripten`.
 Each module runs without arguments and prints one number, which must equal the
 value in `artifacts/expected.json`.

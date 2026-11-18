@@ -20,6 +20,8 @@
 #   xml      ezXML 0.8.6 parse + tree walk
 #   zlib     madler/zlib deflate / inflate
 #   lua      Lua 5.5 interpreter running a word-count / pattern-match script
+#   ffmpeg   FFmpeg 8.1.3 libavcodec + x264: video encode / decode
+#            (DEFS_ffmpeg=-DENCODER=mpeg4 picks the encoder; wasi-sdk only)
 #
 # Expected values: every workload is also compiled natively (HOST_CC) from the
 # same source with the same -D flags and run once; its output is the expected
@@ -37,7 +39,7 @@ OUT=${OUT:-$W/artifacts}
 BLD=$W/build
 mkdir -p "$OUT" "$BLD/native"
 
-ALL="sqlite json btree xml zlib lua"
+ALL="sqlite json btree xml zlib lua ffmpeg"
 WORKLOADS=${*:-${WORKLOADS:-$ALL}}
 TOOLCHAIN=${TOOLCHAIN:-wasi-sdk}
 OPT=${OPT:--O2}
@@ -82,13 +84,19 @@ LUAFLAGS="$LUAFLAGS -Dluai_jmpbuf=int -DLUAI_THROW(L,c)=abort() -DLUAI_TRY(L,c,f
 ZLIB_SRCS="adler32 crc32 deflate inflate inftrees inffast trees zutil compress uncompr"
 
 # --- third_party submodules --------------------------------------------------
-declare -A SUBMOD=( [sqlite]=sqlite [json]=cjson [btree]=btree [xml]=ezxml [zlib]=zlib [lua]=lua )
+declare -A SUBMOD=( [sqlite]=sqlite [json]=cjson [btree]=btree [xml]=ezxml [zlib]=zlib [lua]=lua
+                    [ffmpeg]="ffmpeg x264" )
 for w in $WORKLOADS; do
-  d=${SUBMOD[$w]:-}
-  [ -n "$d" ] || { echo "unknown workload: $w (known: $ALL)" >&2; exit 1; }
-  [ -e "$TP/$d/.git" ] || {
-    echo "third_party/$d is empty — run: git submodule update --init --depth 1" >&2; exit 1; }
+  dirs=${SUBMOD[$w]:-}
+  [ -n "$dirs" ] || { echo "unknown workload: $w (known: $ALL)" >&2; exit 1; }
+  for d in $dirs; do
+    [ -e "$TP/$d/.git" ] || {
+      echo "third_party/$d is empty — run: git submodule update --init --depth 1" >&2; exit 1; }
+  done
 done
+if [[ " $WORKLOADS " == *" ffmpeg "* && $TOOLCHAIN != wasi-sdk ]]; then
+  echo "ffmpeg is built with wasi-sdk only" >&2; exit 1
+fi
 
 # --- SQLite amalgamation -----------------------------------------------------
 # The submodule is the canonical sqlite/sqlite source tree; sqlite3.c is
@@ -111,6 +119,60 @@ sqlite_amalgamation() {
   echo "$rev" > "$SQLITE_BLD/.rev"
 }
 
+# --- FFmpeg + x264 libraries -------------------------------------------------
+# libavcodec with only the codecs below, single-threaded and C only, so the
+# wasm and the native build run the same code. Built per target into
+# build/ffmpeg-<wasm|native> and rebuilt when a submodule or the flags change.
+FF_ENCODERS="libx264 mpeg4 mpeg2video mjpeg prores_ks ffv1"
+FF_DECODERS="h264 mpeg4 mpeg2video mjpeg prores ffv1"
+FF_WASM_CFLAGS="-D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS"
+FF_WASM_LIBS="-lwasi-emulated-signal -lwasi-emulated-process-clocks"
+
+ffmpeg_libs() {
+  local t=$1 d=$BLD/ffmpeg-$1 cc ar ranlib nm cflags xhost="" ffx=""
+  if [ "$t" = wasm ]; then
+    cc=$CC ar=$WASI_SDK/bin/llvm-ar ranlib=$WASI_SDK/bin/llvm-ranlib nm=$WASI_SDK/bin/llvm-nm
+    cflags="$OPT $FF_WASM_CFLAGS"
+    xhost="--host=wasm32-unknown-linux-gnu"
+    ffx="--enable-cross-compile --target-os=none --arch=wasm32 --disable-simd128"
+  else
+    cc=$HOST_CC ar=ar ranlib=ranlib nm=nm cflags="-O2"
+  fi
+  local key
+  key="$(git -C "$TP/ffmpeg" rev-parse HEAD) $(git -C "$TP/x264" rev-parse HEAD) $cc $cflags $FF_ENCODERS $FF_DECODERS"
+  [ "$(cat "$d/.key" 2>/dev/null)" = "$key" ] && return
+  echo "  build libavcodec + x264 ($t)"
+  rm -rf "$d"; mkdir -p "$d/x264" "$d/ffmpeg"
+  ( cd "$d/x264" &&
+    CC=$cc AR=$ar RANLIB=$ranlib "$TP/x264/configure" $xhost --prefix="$d" --enable-static \
+      --disable-cli --disable-asm --disable-thread --disable-opencl --extra-cflags="$cflags" > configure.log 2>&1 &&
+    { [ "$t" != wasm ] || sed -i 's/#define HAVE_MALLOC_H 1/#define HAVE_MALLOC_H 0/' config.h; } &&
+    make -j"$(nproc)" > make.log 2>&1 && make install-lib-static > /dev/null ) || {
+    echo "x264 build failed, see $d/x264/{configure,make}.log" >&2; exit 1; }
+  ( cd "$d/ffmpeg" &&
+    PKG_CONFIG_LIBDIR=$d/lib/pkgconfig "$TP/ffmpeg/configure" --prefix="$d" $ffx \
+      --cc="$cc" --ar="$ar" --ranlib="$ranlib" --nm="$nm" \
+      --extra-cflags="$cflags -I$d/include" --extra-ldflags="-L$d/lib" \
+      --pkg-config=pkg-config --pkg-config-flags=--static \
+      --disable-everything --disable-programs --disable-doc --disable-debug --disable-autodetect \
+      --disable-pthreads --disable-w32threads --disable-os2threads \
+      --disable-asm --disable-inline-asm --disable-network \
+      --disable-avformat --disable-avfilter --disable-avdevice --disable-swresample --disable-swscale \
+      --enable-gpl --enable-libx264 \
+      $(for e in $FF_ENCODERS; do printf -- '--enable-encoder=%s ' "$e"; done) \
+      $(for e in $FF_DECODERS; do printf -- '--enable-decoder=%s ' "$e"; done) > configure.log 2>&1 &&
+    make -j"$(nproc)" > make.log 2>&1 && make install > /dev/null ) || {
+    echo "FFmpeg build failed, see $d/ffmpeg/{configure,make}.log" >&2; exit 1; }
+  echo "$key" > "$d/.key"
+}
+
+ffmpeg_link() {
+  local d=$BLD/ffmpeg-$1
+  echo "-I $d/include -L $d/lib -lavcodec -lx264 -lavutil -lm"
+  [ "$1" = wasm ] && echo "$FF_WASM_LIBS"
+  return 0
+}
+
 # Flags + sources for one workload, shared by the wasm and the native build so
 # the two can only differ in target.
 workload_args() {
@@ -121,6 +183,7 @@ workload_args() {
   xml)    echo "-DEZXML_NOMMAP -I $TP/ezxml $WL/xml.c $TP/ezxml/ezxml.c" ;;
   zlib)   echo "-I $TP/zlib $WL/zlib.c $(for f in $ZLIB_SRCS; do printf '%s ' "$TP/zlib/$f.c"; done)" ;;
   lua)    echo "$LUAFLAGS -I $TP/lua $WL/lua.c $TP/lua/onelua.c" ;;
+  ffmpeg) echo "$WL/ffmpeg.c" ;;
   esac
 }
 
@@ -131,14 +194,16 @@ defs_for() { local v=DEFS_$1; echo "$DEFS ${!v:-}"; }
 build_wasm() {
   local w=$1 extra=""
   [ "$w" = lua ] && extra=$LUA_SIGNAL_LIB
+  [ "$w" = ffmpeg ] && extra=$(ffmpeg_link wasm)
   # -I $WL first so workloads/setjmp.h shadows the sysroot header for Lua.
   $CC $OPT -Wno-everything -I "$WL" $(defs_for "$w") $(workload_args "$w") \
       -o "$OUT/$w.wasm" $extra $TLDFLAGS
 }
 
 build_native() {
-  local w=$1
-  $HOST_CC -O2 -w -I "$WL" $(defs_for "$w") $(workload_args "$w") -o "$BLD/native/$w" -lm
+  local w=$1 extra=""
+  [ "$w" = ffmpeg ] && extra=$(ffmpeg_link native)
+  $HOST_CC -O2 -w -I "$WL" $(defs_for "$w") $(workload_args "$w") -o "$BLD/native/$w" $extra -lm
 }
 
 echo "toolchain: $TOOLCHAIN ($($CC --version 2>&1 | head -1))"
@@ -146,6 +211,7 @@ echo "flags:     $OPT ${DEFS}"
 declare -A EXPECT
 for w in $WORKLOADS; do
   [ "$w" = sqlite ] && sqlite_amalgamation
+  [ "$w" = ffmpeg ] && { ffmpeg_libs wasm; ffmpeg_libs native; }
   printf '  build %-7s' "$w"
   build_wasm "$w"
   build_native "$w"

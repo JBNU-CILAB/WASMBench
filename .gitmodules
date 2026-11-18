@@ -22,3 +22,11 @@
 	path = third_party/ezxml
 	url = https://github.com/lxfontes/ezxml
 	shallow = true
+[submodule "third_party/ffmpeg"]
+	path = third_party/ffmpeg
+	url = https://github.com/FFmpeg/FFmpeg
+	shallow = true
+[submodule "third_party/x264"]
+	path = third_party/x264
+	url = https://code.videolan.org/videolan/x264.git
+	shallow = true
