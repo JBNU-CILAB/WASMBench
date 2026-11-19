@@ -95,7 +95,8 @@ for w in $WORKLOADS; do
   done
 done
 if [[ " $WORKLOADS " == *" ffmpeg "* && $TOOLCHAIN != wasi-sdk ]]; then
-  echo "ffmpeg is built with wasi-sdk only" >&2; exit 1
+  echo "ffmpeg is built with wasi-sdk only" >&2
+  exit 1
 fi
 
 # --- SQLite amalgamation -----------------------------------------------------
@@ -126,46 +127,145 @@ sqlite_amalgamation() {
 FF_ENCODERS="libx264 mpeg4 mpeg2video mjpeg prores_ks ffv1"
 FF_DECODERS="h264 mpeg4 mpeg2video mjpeg prores ffv1"
 FF_PARSERS="h264"
+
 FF_WASM_CFLAGS="-D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS"
 FF_WASM_LIBS="-lwasi-emulated-signal -lwasi-emulated-process-clocks"
 
-ffmpeg_libs() {
-  local t=$1 d=$BLD/ffmpeg-$1 cc ar ranlib nm cflags xhost="" ffx=""
-  if [ "$t" = wasm ]; then
-    cc=$CC ar=$WASI_SDK/bin/llvm-ar ranlib=$WASI_SDK/bin/llvm-ranlib nm=$WASI_SDK/bin/llvm-nm
-    cflags="$OPT $FF_WASM_CFLAGS"
-    xhost="--host=wasm32-unknown-linux-gnu"
-    ffx="--enable-cross-compile --target-os=none --arch=wasm32 --disable-simd128"
+# Toolchain for one target, set by ffmpeg_toolchain and used by the two
+# library builds below.
+FF_CC=""
+FF_AR=""
+FF_RANLIB=""
+FF_NM=""
+FF_CFLAGS=""
+
+ffmpeg_toolchain() {
+  if [ "$1" = wasm ]; then
+    FF_CC=$CC
+    FF_AR=$WASI_SDK/bin/llvm-ar
+    FF_RANLIB=$WASI_SDK/bin/llvm-ranlib
+    FF_NM=$WASI_SDK/bin/llvm-nm
+    FF_CFLAGS="$OPT $FF_WASM_CFLAGS"
   else
-    cc=$HOST_CC ar=ar ranlib=ranlib nm=nm cflags="-O2"
+    FF_CC=$HOST_CC
+    FF_AR=ar
+    FF_RANLIB=ranlib
+    FF_NM=nm
+    FF_CFLAGS="-O2"
   fi
+}
+
+build_x264() {
+  local target=$1
+  local prefix=$2
+
+  local host_flags=()
+  if [ "$target" = wasm ]; then
+    host_flags=(--host=wasm32-unknown-linux-gnu)
+  fi
+
+  cd "$prefix/x264"
+
+  CC=$FF_CC AR=$FF_AR RANLIB=$FF_RANLIB \
+    "$TP/x264/configure" "${host_flags[@]}" \
+      --prefix="$prefix" \
+      --enable-static \
+      --disable-cli \
+      --disable-asm \
+      --disable-thread \
+      --disable-opencl \
+      --extra-cflags="$FF_CFLAGS" \
+      > configure.log 2>&1 || return 1
+
+  # wasi-libc has no malloc.h.
+  if [ "$target" = wasm ]; then
+    sed -i 's/#define HAVE_MALLOC_H 1/#define HAVE_MALLOC_H 0/' config.h
+  fi
+
+  make -j"$(nproc)" > make.log 2>&1 || return 1
+  make install-lib-static > /dev/null
+}
+
+build_libavcodec() {
+  local target=$1
+  local prefix=$2
+
+  local cross_flags=()
+  if [ "$target" = wasm ]; then
+    cross_flags=(--enable-cross-compile --target-os=none --arch=wasm32 --disable-simd128)
+  fi
+
+  local codec_flags=()
+  local name
+  for name in $FF_ENCODERS; do codec_flags+=(--enable-encoder="$name"); done
+  for name in $FF_DECODERS; do codec_flags+=(--enable-decoder="$name"); done
+  for name in $FF_PARSERS;  do codec_flags+=(--enable-parser="$name");  done
+
+  cd "$prefix/ffmpeg"
+
+  PKG_CONFIG_LIBDIR=$prefix/lib/pkgconfig \
+    "$TP/ffmpeg/configure" "${cross_flags[@]}" \
+      --prefix="$prefix" \
+      --cc="$FF_CC" \
+      --ar="$FF_AR" \
+      --ranlib="$FF_RANLIB" \
+      --nm="$FF_NM" \
+      --extra-cflags="$FF_CFLAGS -I$prefix/include" \
+      --extra-ldflags="-L$prefix/lib" \
+      --pkg-config=pkg-config \
+      --pkg-config-flags=--static \
+      --disable-everything \
+      --disable-programs \
+      --disable-doc \
+      --disable-debug \
+      --disable-autodetect \
+      --disable-pthreads \
+      --disable-w32threads \
+      --disable-os2threads \
+      --disable-asm \
+      --disable-inline-asm \
+      --disable-network \
+      --disable-avformat \
+      --disable-avfilter \
+      --disable-avdevice \
+      --disable-swresample \
+      --disable-swscale \
+      --enable-gpl \
+      --enable-libx264 \
+      "${codec_flags[@]}" \
+      > configure.log 2>&1 || return 1
+
+  make -j"$(nproc)" > make.log 2>&1 || return 1
+  make install > /dev/null
+}
+
+ffmpeg_libs() {
+  local target=$1
+  local prefix=$BLD/ffmpeg-$target
+
+  ffmpeg_toolchain "$target"
+
   local key
-  key="$(git -C "$TP/ffmpeg" rev-parse HEAD) $(git -C "$TP/x264" rev-parse HEAD) $cc $cflags $FF_ENCODERS $FF_DECODERS $FF_PARSERS"
-  [ "$(cat "$d/.key" 2>/dev/null)" = "$key" ] && return
-  echo "  build libavcodec + x264 ($t)"
-  rm -rf "$d"; mkdir -p "$d/x264" "$d/ffmpeg"
-  ( cd "$d/x264" &&
-    CC=$cc AR=$ar RANLIB=$ranlib "$TP/x264/configure" $xhost --prefix="$d" --enable-static \
-      --disable-cli --disable-asm --disable-thread --disable-opencl --extra-cflags="$cflags" > configure.log 2>&1 &&
-    { [ "$t" != wasm ] || sed -i 's/#define HAVE_MALLOC_H 1/#define HAVE_MALLOC_H 0/' config.h; } &&
-    make -j"$(nproc)" > make.log 2>&1 && make install-lib-static > /dev/null ) || {
-    echo "x264 build failed, see $d/x264/{configure,make}.log" >&2; exit 1; }
-  ( cd "$d/ffmpeg" &&
-    PKG_CONFIG_LIBDIR=$d/lib/pkgconfig "$TP/ffmpeg/configure" --prefix="$d" $ffx \
-      --cc="$cc" --ar="$ar" --ranlib="$ranlib" --nm="$nm" \
-      --extra-cflags="$cflags -I$d/include" --extra-ldflags="-L$d/lib" \
-      --pkg-config=pkg-config --pkg-config-flags=--static \
-      --disable-everything --disable-programs --disable-doc --disable-debug --disable-autodetect \
-      --disable-pthreads --disable-w32threads --disable-os2threads \
-      --disable-asm --disable-inline-asm --disable-network \
-      --disable-avformat --disable-avfilter --disable-avdevice --disable-swresample --disable-swscale \
-      --enable-gpl --enable-libx264 \
-      $(for e in $FF_ENCODERS; do printf -- '--enable-encoder=%s ' "$e"; done) \
-      $(for e in $FF_DECODERS; do printf -- '--enable-decoder=%s ' "$e"; done) \
-      $(for e in $FF_PARSERS; do printf -- '--enable-parser=%s ' "$e"; done) > configure.log 2>&1 &&
-    make -j"$(nproc)" > make.log 2>&1 && make install > /dev/null ) || {
-    echo "FFmpeg build failed, see $d/ffmpeg/{configure,make}.log" >&2; exit 1; }
-  echo "$key" > "$d/.key"
+  key="$(git -C "$TP/ffmpeg" rev-parse HEAD) $(git -C "$TP/x264" rev-parse HEAD)"
+  key="$key $FF_CC $FF_CFLAGS $FF_ENCODERS $FF_DECODERS $FF_PARSERS"
+  if [ "$(cat "$prefix/.key" 2>/dev/null)" = "$key" ]; then
+    return
+  fi
+
+  echo "  build libavcodec + x264 ($target)"
+  rm -rf "$prefix"
+  mkdir -p "$prefix/x264" "$prefix/ffmpeg"
+
+  if ! (build_x264 "$target" "$prefix"); then
+    echo "x264 build failed, see $prefix/x264/{configure,make}.log" >&2
+    exit 1
+  fi
+  if ! (build_libavcodec "$target" "$prefix"); then
+    echo "FFmpeg build failed, see $prefix/ffmpeg/{configure,make}.log" >&2
+    exit 1
+  fi
+
+  echo "$key" > "$prefix/.key"
 }
 
 # The source clip (workloads/media) goes into the module as a C array, since
@@ -174,17 +274,27 @@ ffmpeg_video() {
   mkdir -p "$BLD/media"
   python3 -I - "$WL/media/noise_160x90.h264" "$BLD/media/ffmpeg_video.h" <<'PY'
 import sys
-data = open(sys.argv[1], "rb").read()
-rows = (",".join(map(str, data[i:i + 24])) for i in range(0, len(data), 24))
-open(sys.argv[2], "w").write("static const unsigned char ffmpeg_video[] = {\n" + ",\n".join(rows) + "\n};\n")
+
+src, dst = sys.argv[1:3]
+data = open(src, "rb").read()
+
+rows = []
+for i in range(0, len(data), 24):
+    rows.append(",".join(str(b) for b in data[i:i + 24]))
+
+with open(dst, "w") as f:
+    f.write("static const unsigned char ffmpeg_video[] = {\n")
+    f.write(",\n".join(rows))
+    f.write("\n};\n")
 PY
 }
 
 ffmpeg_link() {
-  local d=$BLD/ffmpeg-$1
-  echo "-I $d/include -L $d/lib -lavcodec -lx264 -lavutil -lm"
-  [ "$1" = wasm ] && echo "$FF_WASM_LIBS"
-  return 0
+  local prefix=$BLD/ffmpeg-$1
+  echo "-I $prefix/include -L $prefix/lib -lavcodec -lx264 -lavutil -lm"
+  if [ "$1" = wasm ]; then
+    echo "$FF_WASM_LIBS"
+  fi
 }
 
 # Flags + sources for one workload, shared by the wasm and the native build so
@@ -225,7 +335,11 @@ echo "flags:     $OPT ${DEFS}"
 declare -A EXPECT
 for w in $WORKLOADS; do
   [ "$w" = sqlite ] && sqlite_amalgamation
-  [ "$w" = ffmpeg ] && { ffmpeg_libs wasm; ffmpeg_libs native; ffmpeg_video; }
+  if [ "$w" = ffmpeg ]; then
+    ffmpeg_libs wasm
+    ffmpeg_libs native
+    ffmpeg_video
+  fi
   printf '  build %-7s' "$w"
   build_wasm "$w"
   build_native "$w"
