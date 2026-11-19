@@ -20,7 +20,7 @@
 #   xml      ezXML 0.8.6 parse + tree walk
 #   zlib     madler/zlib deflate / inflate
 #   lua      Lua 5.5 interpreter running a word-count / pattern-match script
-#   ffmpeg   FFmpeg 8.1.3 libavcodec + x264: video encode / decode
+#   ffmpeg   FFmpeg 8.1.3 libavcodec + x264: encode / decode a small random-noise clip
 #            (DEFS_ffmpeg=-DENCODER=mpeg4 picks the encoder; wasi-sdk only)
 #
 # Expected values: every workload is also compiled natively (HOST_CC) from the
@@ -125,6 +125,7 @@ sqlite_amalgamation() {
 # build/ffmpeg-<wasm|native> and rebuilt when a submodule or the flags change.
 FF_ENCODERS="libx264 mpeg4 mpeg2video mjpeg prores_ks ffv1"
 FF_DECODERS="h264 mpeg4 mpeg2video mjpeg prores ffv1"
+FF_PARSERS="h264"
 FF_WASM_CFLAGS="-D_WASI_EMULATED_SIGNAL -D_WASI_EMULATED_PROCESS_CLOCKS"
 FF_WASM_LIBS="-lwasi-emulated-signal -lwasi-emulated-process-clocks"
 
@@ -139,7 +140,7 @@ ffmpeg_libs() {
     cc=$HOST_CC ar=ar ranlib=ranlib nm=nm cflags="-O2"
   fi
   local key
-  key="$(git -C "$TP/ffmpeg" rev-parse HEAD) $(git -C "$TP/x264" rev-parse HEAD) $cc $cflags $FF_ENCODERS $FF_DECODERS"
+  key="$(git -C "$TP/ffmpeg" rev-parse HEAD) $(git -C "$TP/x264" rev-parse HEAD) $cc $cflags $FF_ENCODERS $FF_DECODERS $FF_PARSERS"
   [ "$(cat "$d/.key" 2>/dev/null)" = "$key" ] && return
   echo "  build libavcodec + x264 ($t)"
   rm -rf "$d"; mkdir -p "$d/x264" "$d/ffmpeg"
@@ -160,10 +161,23 @@ ffmpeg_libs() {
       --disable-avformat --disable-avfilter --disable-avdevice --disable-swresample --disable-swscale \
       --enable-gpl --enable-libx264 \
       $(for e in $FF_ENCODERS; do printf -- '--enable-encoder=%s ' "$e"; done) \
-      $(for e in $FF_DECODERS; do printf -- '--enable-decoder=%s ' "$e"; done) > configure.log 2>&1 &&
+      $(for e in $FF_DECODERS; do printf -- '--enable-decoder=%s ' "$e"; done) \
+      $(for e in $FF_PARSERS; do printf -- '--enable-parser=%s ' "$e"; done) > configure.log 2>&1 &&
     make -j"$(nproc)" > make.log 2>&1 && make install > /dev/null ) || {
     echo "FFmpeg build failed, see $d/ffmpeg/{configure,make}.log" >&2; exit 1; }
   echo "$key" > "$d/.key"
+}
+
+# The source clip (workloads/media) goes into the module as a C array, since
+# the modules read no files.
+ffmpeg_video() {
+  mkdir -p "$BLD/media"
+  python3 -I - "$WL/media/noise_160x90.h264" "$BLD/media/ffmpeg_video.h" <<'PY'
+import sys
+data = open(sys.argv[1], "rb").read()
+rows = (",".join(map(str, data[i:i + 24])) for i in range(0, len(data), 24))
+open(sys.argv[2], "w").write("static const unsigned char ffmpeg_video[] = {\n" + ",\n".join(rows) + "\n};\n")
+PY
 }
 
 ffmpeg_link() {
@@ -183,7 +197,7 @@ workload_args() {
   xml)    echo "-DEZXML_NOMMAP -I $TP/ezxml $WL/xml.c $TP/ezxml/ezxml.c" ;;
   zlib)   echo "-I $TP/zlib $WL/zlib.c $(for f in $ZLIB_SRCS; do printf '%s ' "$TP/zlib/$f.c"; done)" ;;
   lua)    echo "$LUAFLAGS -I $TP/lua $WL/lua.c $TP/lua/onelua.c" ;;
-  ffmpeg) echo "$WL/ffmpeg.c" ;;
+  ffmpeg) echo "-I $BLD/media $WL/ffmpeg.c" ;;
   esac
 }
 
@@ -211,7 +225,7 @@ echo "flags:     $OPT ${DEFS}"
 declare -A EXPECT
 for w in $WORKLOADS; do
   [ "$w" = sqlite ] && sqlite_amalgamation
-  [ "$w" = ffmpeg ] && { ffmpeg_libs wasm; ffmpeg_libs native; }
+  [ "$w" = ffmpeg ] && { ffmpeg_libs wasm; ffmpeg_libs native; ffmpeg_video; }
   printf '  build %-7s' "$w"
   build_wasm "$w"
   build_native "$w"
