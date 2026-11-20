@@ -18,18 +18,17 @@ Real workload based WebAssembly engine performance benchmark suite.
 
 ```sh
 git submodule update --init --depth 1
-./build.sh
-./build.sh sqlite zlib
-DEFS_sqlite="-DROWS=5000" ./build.sh sqlite
-DEFS_ffmpeg="-DENCODER=mpeg4 -DMODE=1 -DITERS=4" ./build.sh ffmpeg
+./build.py                  # workloads enabled in config.json
+./build.py sqlite zlib
 ```
 
-Requires wasi-sdk (`WASI_SDK`), a host C compiler and `tclsh`, plus `make` and
-`pkg-config` for `ffmpeg`. The `ffmpeg` encoder is one of `libx264` (default),
-`mpeg4`, `mpeg2video`, `mjpeg`, `prores_ks` and `ffv1`; `MODE=0` decodes and
-`MODE=1` encodes; `ITERS` (default 64 for decode, 8 for encode) sets the
-measured iterations. Its libraries are built once per target under `build/` and
-`ffmpeg` is not available with `TOOLCHAIN=emscripten`. The source clip is
-embedded in the module; `workloads/media/README.md` shows how it was made.
+Requires podman or docker. Settings are in `config.json`: compile options and
+each workload's `-D` knobs (documented at the top of `workloads/<name>.c`).
+
+```json
+"workloads": { "ffmpeg": { "enabled": true, "defines": { "ENCODER": "mpeg4", "MODE": 1 } } }
+```
+
 Each module runs without arguments and prints one number, which must equal the
-value in `artifacts/expected.json`.
+value in `artifacts/expected.json`. The `ffmpeg` source clip is embedded in the
+module; `workloads/media/README.md` shows how it was made.
