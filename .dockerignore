@@ -1,0 +1,5 @@
+# Build context for container/*.Containerfile: sources only.
+.git
+**/.git
+build
+artifacts

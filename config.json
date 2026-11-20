@@ -1,0 +1,95 @@
+{
+  "output": "artifacts",
+  "compile": {
+    "opt": "-O2",
+    "cflags": [],
+    "ldflags": []
+  },
+  "workloads": {
+    "sqlite": {
+      "enabled": true,
+      "compile": {},
+      "defines": {
+        "ITERS": 96,
+        "ROWS": 1800,
+        "RANGE": 500,
+        "QUERIES": 31,
+        "PREPARED": 0,
+        "SEED": "0x9E3779B9"
+      }
+    },
+    "json": {
+      "enabled": true,
+      "compile": {},
+      "defines": {
+        "ITERS": 96,
+        "BYTES": 196608,
+        "DEPTH": 6,
+        "PRINT": 0,
+        "SEED": "0x9E3779B9"
+      }
+    },
+    "btree": {
+      "enabled": true,
+      "compile": {},
+      "defines": {
+        "ITERS": 16,
+        "KEYS": 30000,
+        "FANOUT": 0,
+        "LOOKUPS": 1,
+        "DELSTRIDE": 3,
+        "SEED": "0x9E3779B9"
+      }
+    },
+    "xml": {
+      "enabled": true,
+      "compile": {},
+      "defines": {
+        "ITERS": 256,
+        "BYTES": 196608,
+        "DEPTH": 7,
+        "ATTRS": 60,
+        "PRINT": 0,
+        "SEED": "0x9E3779B9"
+      }
+    },
+    "zlib": {
+      "enabled": true,
+      "compile": {},
+      "defines": {
+        "ITERS": 32,
+        "BYTES": 262144,
+        "LEVEL": 6,
+        "WBITS": 15,
+        "MEMLEVEL": 8,
+        "STRATEGY": 0,
+        "MODE": 0,
+        "SEED": "0x9E3779B9"
+      }
+    },
+    "lua": {
+      "enabled": true,
+      "compile": {},
+      "defines": {
+        "ITERS": 40,
+        "BYTES": 49152,
+        "SORT": 1,
+        "SEED": "0x9E3779B9"
+      }
+    },
+    "ffmpeg": {
+      "enabled": true,
+      "compile": {},
+      "defines": {
+        "ENCODER": "libx264",
+        "MODE": 0,
+        "ITERS": null,
+        "FRAMES": 48,
+        "GOP": 48,
+        "PRESET": null,
+        "CRF": 23,
+        "QSCALE": 4
+      }
+    }
+  }
+}
