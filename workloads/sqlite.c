@@ -6,7 +6,7 @@
  * and the VDBE dispatch loop all run on every statement.
  *
  * Everything runs against ":memory:", so there is no file I/O and no VFS
- * behaviour to depend on (see build.sh for the compile-time options). Nothing
+ * behaviour to depend on (see build.py for the compile-time options). Nothing
  * here calls random(), datetime() or anything else that reads a clock or an
  * entropy source.
  *

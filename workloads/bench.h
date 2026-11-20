@@ -4,14 +4,14 @@
  *     uint32_t runtime(void)
  *
  * which does all the work and returns one checksum, and BENCH_MAIN prints that
- * value as a single decimal line. The module takes no arguments; the runner
- * (benchmark.py) compares the line with the expected value.
+ * value as a single decimal line. The module takes no arguments; a correct
+ * run prints exactly the expected value build.py records in expected.json.
  *
  * Tuning is compile time. Each workload declares its knobs as
  *     #ifndef NAME
  *     #define NAME default
  *     #endif
- * and build.sh passes overrides as -D (DEFS / DEFS_<workload>). The expected
+ * and build.py passes overrides from config.json as -D. The expected
  * value for whatever was chosen comes from a native build of the same source
  * with the same -D flags, so a tuned build is checked as strictly as the
  * default one.
