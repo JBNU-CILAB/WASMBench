@@ -395,8 +395,10 @@ def link_args(name, target):
         return ["-lwasi-emulated-signal"]
     if name == "ffmpeg":
         p = os.path.join(BLD, f"ffmpeg-{target}")
+        # 1 MB stack: wasm-ld's default 64 KB overflows in some encoders (ffv1
+        # encode, measured), which a native run with its 8 MB stack never shows.
         return (["-I", f"{p}/include", "-L", f"{p}/lib", "-lavcodec", "-lx264", "-lavutil", "-lm"]
-                + (FF_WASM_LIBS if target == "wasm" else []))
+                + (FF_WASM_LIBS + ["-Wl,-z,stack-size=1048576"] if target == "wasm" else []))
     return []
 
 
